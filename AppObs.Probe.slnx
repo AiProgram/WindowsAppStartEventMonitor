@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AppObs.Probe.Common/AppObs.Probe.Common.csproj" />
+    <Project Path="src/etw-proc/etw-proc.csproj" />
+    <Project Path="src/ident/ident.csproj" />
+    <Project Path="src/probe-report/probe-report.csproj" />
+    <Project Path="src/win-evt/win-evt.csproj" />
+  </Folder>
+</Solution>
