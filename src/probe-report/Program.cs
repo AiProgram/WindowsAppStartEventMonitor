@@ -43,12 +43,16 @@ internal static class Program
         // ---- 配对 ----
         var rows = new List<Row>();
         var usedStarts = new HashSet<int>();
+        var fanOut = new List<int>();
 
         foreach (var a in actions)
         {
             var window = starts
                 .Where((s, i) => s.Qpc >= a.Qpc - t0WindowTicks && s.Qpc <= a.Qpc + launchWindowTicks)
                 .ToList();
+
+            var appInWindow = window.Where(s => !IsInfra(s.Exe)).ToList();
+            fanOut.Add(appInWindow.Count);
 
             var samePid = window.FirstOrDefault(s => s.Pid == a.Pid);
             var anyApp = window.FirstOrDefault(s => !IsInfra(s.Exe));
@@ -90,8 +94,11 @@ internal static class Program
 
         // ---- 统计 ----
         var report = new StringBuilder();
-        var etwCounters = ReadCounters(opt.EtwCountersPath);
-        var winCounters = ReadCounters(opt.WinEvtCountersPath);
+        // 计数器文件默认跟随输入文件命名，避免读到上一轮的旧计数
+        var etwCountersPath = opt.EtwCountersPath ?? Path.ChangeExtension(opt.EtwPath, ".counters.json");
+        var winCountersPath = opt.WinEvtCountersPath ?? Path.ChangeExtension(opt.WinEvtPath, ".counters.json");
+        var etwCounters = ReadCounters(etwCountersPath);
+        var winCounters = ReadCounters(winCountersPath);
 
         var byVerdict = rows.GroupBy(r => r.Verdict).ToDictionary(g => g.Key, g => g.Count());
 
@@ -113,6 +120,9 @@ internal static class Program
         var aCount = byVerdict.GetValueOrDefault("A：ETW+WinEvent 同 PID");
         var hitRate = actions.Count == 0 ? 0 : Math.Round(100.0 * aCount / actions.Count, 1);
         report.AppendLine($"| **A 级覆盖率** | **{hitRate}%** | A / 用户动作 |");
+        var multi = fanOut.Count(f => f > 1);
+        report.AppendLine($"| **多报动作数（时间窗内 >1 个应用进程）** | **{multi} / {actions.Count}** | 一次动作被记成多次打开的规模 |");
+        report.AppendLine($"| 单次动作最大进程扇出 | {(fanOut.Count == 0 ? 0 : fanOut.Max())} | 多进程归并要处理的量级 |");
         report.AppendLine();
 
         var rawStart = etwAll.FirstOrDefault(r => r.Kind == "RawEvent" && r.EventId == 1);
@@ -179,6 +189,17 @@ internal static class Program
                      .OrderByDescending(g => g.Count()).Take(12))
         {
             report.AppendLine($"| {DisplayName(g.First().ImagePath, g.Key)} | {g.Count()} | {g.Key} |");
+        }
+
+        report.AppendLine();
+        report.AppendLine("## 7. 父进程归并（同一 ppid 的进程组 = 一次动作）");
+        report.AppendLine();
+        report.AppendLine("| ppid | 子进程数 | 子进程 exe |");
+        report.AppendLine("|---|---|---|");
+        foreach (var g in appStarts.GroupBy(s => s.Ppid).OrderByDescending(g => g.Count()).Take(8))
+        {
+            var exes = string.Join(", ", g.Select(s => s.Exe).Distinct(StringComparer.OrdinalIgnoreCase));
+            report.AppendLine($"| {g.Key} | {g.Count()} | {exes} |");
         }
 
         var md = report.ToString();
@@ -337,8 +358,8 @@ internal sealed class Options
 {
     public string EtwPath = "out/etw-proc.jsonl";
     public string WinEvtPath = "out/win-evt.jsonl";
-    public string EtwCountersPath = "out/etw-proc.counters.json";
-    public string WinEvtCountersPath = "out/win-evt.counters.json";
+    public string? EtwCountersPath;
+    public string? WinEvtCountersPath;
     public string OutPath = "out/coverage.md";
     public int T0WindowMs = 1500;
     public int LaunchWindowMs = 5000;
@@ -354,6 +375,8 @@ internal sealed class Options
             {
                 case "--etw": o.EtwPath = args[++i]; break;
                 case "--win": o.WinEvtPath = args[++i]; break;
+                case "--etw-counters": o.EtwCountersPath = args[++i]; break;
+                case "--win-counters": o.WinEvtCountersPath = args[++i]; break;
                 case "--out" or "-o": o.OutPath = args[++i]; break;
                 case "--t0-window": o.T0WindowMs = int.Parse(args[++i]); break;
                 case "--launch-window": o.LaunchWindowMs = int.Parse(args[++i]); break;
